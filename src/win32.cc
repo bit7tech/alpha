@@ -41,6 +41,16 @@ typedef double   f64;
 #include "game_impl.h"
 
 //----------------------------------------------------------------------------------------------------------------------
+// Utilities
+//----------------------------------------------------------------------------------------------------------------------
+
+template <typename T>
+T min(T a, T b)
+{
+    return a < b ? a : b;
+}
+
+//----------------------------------------------------------------------------------------------------------------------
 // Structures
 //----------------------------------------------------------------------------------------------------------------------
 
@@ -57,6 +67,11 @@ struct Win32WindowDimension
 {
     int width;
     int height;
+};
+
+struct Win32Pos
+{
+    int x, y;
 };
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -78,6 +93,16 @@ Win32WindowDimension win32GetWindowDimension(HWND wnd)
     return {
         clientRect.right - clientRect.left,
         clientRect.bottom - clientRect.top
+    };
+}
+
+Win32Pos win32GetWindowPos(HWND wnd)
+{
+    WINDOWPLACEMENT wp;
+    GetWindowPlacement(wnd, &wp);
+    return {
+        wp.rcNormalPosition.left,
+        wp.rcNormalPosition.top
     };
 }
 
@@ -106,14 +131,86 @@ void win32ResizeDIBSection(Win32OffScreenBuffer& buffer, int width, int height)
 
 void win32DisplayBufferInWindow(const Win32OffScreenBuffer& buffer, HDC dc, int windowWidth, int windowHeight)
 {
+    int pixWidth = windowWidth / buffer.width;
+    int pixHeight = windowHeight / buffer.height;
+    int pixSize = min(pixWidth, pixHeight);
+    int realWidth = pixSize * buffer.width;
+    int realHeight = pixSize * buffer.height;
+    int realX = (windowWidth - realWidth) / 2;
+    int realY = (windowHeight - realHeight) / 2;
+
+    SelectObject(dc, GetStockObject(BLACK_PEN));
+    SelectObject(dc, GetStockObject(BLACK_BRUSH));
+
+    Rectangle(dc, 0, 0, windowWidth, realY);
+    Rectangle(dc, 0, realY + realHeight, windowWidth, windowHeight);
+    Rectangle(dc, 0, realY, realX, realY + realHeight);
+    Rectangle(dc, realX + realWidth, realY, windowWidth, realY + realHeight);
+
     StretchDIBits(
         dc,
-        0, 0, windowWidth, windowHeight,
+        realX, realY, realWidth, realHeight,
         0, 0, buffer.width, buffer.height,
         buffer.memory,
         &buffer.info,
         DIB_RGB_COLORS,
         SRCCOPY);
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+// Fullscreen control
+
+global_variable bool gFullScreen = false;
+global_variable Win32Pos gOrigPos;
+
+void win32FullScreen(HWND wnd)
+{
+    if (!gFullScreen)
+    {
+        SetWindowRgn(wnd, 0, FALSE);
+        int screenWidth = GetSystemMetrics(SM_CXSCREEN);
+        int screenHeight = GetSystemMetrics(SM_CYSCREEN);
+        gOrigPos = win32GetWindowPos(wnd);
+
+        DEVMODE mode;
+        EnumDisplaySettings(0, 0, &mode);
+        mode.dmBitsPerPel = 32;
+        mode.dmPelsWidth = screenWidth;
+        mode.dmPelsHeight = screenHeight;
+        mode.dmFields = DM_BITSPERPEL | DM_PELSWIDTH | DM_PELSHEIGHT;
+        long result = ChangeDisplaySettings(&mode, CDS_FULLSCREEN);
+
+        if (result == DISP_CHANGE_SUCCESSFUL)
+        {
+            DWORD style = GetWindowLong(wnd, GWL_STYLE);
+            style &= ~(WS_CAPTION | WS_THICKFRAME);
+            SetWindowLong(wnd, GWL_STYLE, style);
+
+            SetWindowPos(wnd, 0, 0, 0, screenWidth, screenHeight, SWP_NOZORDER);
+            InvalidateRect(wnd, 0, TRUE);
+        }
+
+        gFullScreen = true;
+    }
+    else
+    {
+        ChangeDisplaySettings(NULL, CDS_FULLSCREEN);
+        gFullScreen = false;
+
+        DWORD style = GetWindowLong(wnd, GWL_STYLE);
+        style |= WS_CAPTION | WS_THICKFRAME;
+        SetWindowLong(wnd, GWL_STYLE, style);
+
+        RECT rc = { 0, 0, kWidth * kScale, kHeight * kScale };
+        rc.left += gOrigPos.x;
+        rc.right += gOrigPos.x;
+        rc.top += gOrigPos.y;
+        rc.bottom += gOrigPos.y;
+        AdjustWindowRect(&rc, style, FALSE);
+
+        SetWindowPos(wnd, 0, gOrigPos.x, gOrigPos.y, rc.right - rc.left, rc.bottom - rc.top, SWP_NOZORDER);
+        InvalidateRect(wnd, 0, TRUE);
+    }
 }
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -226,6 +323,10 @@ void win32ProcessPendingMessages()
                 else if (vkCode >= '0' && vkCode <= '9')
                 {
                     gInput.number = int(vkCode - '0');
+                }
+                else if (vkCode == VK_RETURN && altKeyWasDown)
+                {
+                    win32FullScreen(message.hwnd);
                 }
             }
 

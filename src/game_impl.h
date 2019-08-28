@@ -27,4 +27,12 @@ void doneGame()
 
 void gameUpdateAndRender(GameOffScreenBuffer& buffer, GameInput& input)
 {
+    u32* p = buffer.memory;
+    for (int r = 0; r < buffer.height; ++r)
+    {
+        for (int c = 0; c < buffer.width; ++c)
+        {
+            *p++ = ((r >> 3) ^ (c >> 3)) & 1 ? G_RGB(255, 0, 0) : G_RGB(0, 0, 0);
+        }
+    }
 }
